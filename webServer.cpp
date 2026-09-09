@@ -36,10 +36,53 @@
 // **************************************************************************************
 // * processRequest,
 //   - Return HTTP code to be sent back
-//   - Set filename if appropriate. Filename syntax is valided but existance is not verified.
+//   - Set filename if appropriate. Filename syntax is validated but existance is not verified.
 // **************************************************************************************
-int readHeader(int sockFd,std::string &filename) {
-  return 0;
+int readHeader(int sockFd, std::string &fileName, int &method) {
+  int returnCode = 400; // Default
+  std::string header;
+  int bytesRead;
+
+  while(header.find("\r\n\r\n") == std::string::npos) {
+    char buffer[BUFFER_SIZE];
+    bytesRead = read(sockFd, buffer, BUFFER_SIZE);
+
+    if (bytesRead <=0) {
+      DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
+      return 0;
+    }
+
+    for (int i = 0; i < bytesRead; i++) {
+      header += buffer[i];
+    }
+  }
+
+  size_t endOfFirstLine = header.find("\r\n");
+  std::string firstLine = header.substr(0, endOfFirstLine);
+  size_t firstSpace = firstLine.find(" ");
+  std::string methodString = firstLine.substr(0, firstSpace);
+  size_t secondSpace = firstLine.find(" ", firstSpace + 1);
+  fileName = firstLine.substr(firstSpace + 1, secondSpace - firstSpace - 1);
+
+  if (methodString == "GET") {
+    method = GET;
+  } else if (methodString == "HEAD") {
+    method = HEAD;
+  } else if (methodString == "POST") {
+    method = POST;
+  } else {
+    return returnCode; // Invalid method
+  }
+
+  bool validFileName = std::regex_match(fileName, std::regex("/file[0-9]+\\.html")) || 
+                       std::regex_match(fileName, std::regex("/image[0-9]+\\.jpg"));
+  if (validFileName) {
+    returnCode = 200; // Valid method and file
+  } else {
+    returnCode = 404; // File not found
+  }
+
+  return returnCode;
 }
 
 
@@ -47,22 +90,32 @@ int readHeader(int sockFd,std::string &filename) {
 // * Send one line (including the line terminator <LF><CR>)
 // * - Assumes the terminator is not included, so it is appended.
 // **************************************************************************
-void sendLine(int socketFd, std::string &stringToSend) {
-  return;
+void sendLine(int sockFd, std::string &stringToSend) {
+  char fullLine[stringToSend.length() + 2]; // +2 for \r\n
+  std::copy(stringToSend.begin(), stringToSend.end(), fullLine);
+  fullLine[stringToSend.length()] = '\r';
+  fullLine[stringToSend.length() + 1] = '\n';
+  
+  write(sockFd, fullLine, fullLine.length()); // Send array
 }
 
 // **************************************************************************
 // * Send the entire 404 response, header and body.
 // **************************************************************************
 void send404(int sockFd) {
-  return;
+  sendLine(sockFd, "HTTP/1.0 404 Not Found");
+  sendLine(sockFd, "content-type: text/html");
+  sendLine(sockFd, "");
+  sendLine(sockFd, "File not found");
+  sendLine(sockFd, "");
 }
 
 // **************************************************************************
 // * Send the entire 400 response, header and body.
 // **************************************************************************
 void send400(int sockFd) {
-  return;
+  sendLine(sockFd, "HTTP/1.0 400 Bad Request");
+  sendLine(sockFd, "");
 }
 
 
@@ -70,7 +123,7 @@ void send400(int sockFd) {
 // * sendFile
 // * -- Send a file back to the browser.
 // **************************************************************************************
-void sesendFile(int sockFd,std::string filename) {
+void sendFile(int sockFd, std::string filename) {
   return;
 }
 
@@ -110,23 +163,44 @@ int processConnection(int sockFd) {
     write(sockFd, container.c_str(), container.length()); // Echo the line back to the client
 
     // "CLOSE" was found
-    if (message.find("CLOSE") != std::string::npos) {
+    if (container.find("CLOSE") != std::string::npos) {
       close = true;
     }
   }
  
   // Call readHeader()
+  std::string fileName;
+  int method;
+  int returnCode = readHeader(sockFd, &fileName, &method);
 
   // If read header returned 400, send 400
+  if (returnCode == 400) {
+    send400(sockFd);
+    return 0;
+  }
 
   // If read header returned 404, call send404
+  if (returnCode == 404) {
+    send404(sockFd);
+    return(0);
+  }
 
   // 471: If read header returned 200, call sendFile
+  // if (returnCode == 200) {
+  //   sendFile(sockFd, fileName);
+  // }
   
   // 598 students
   // - If the header was valid and the method was GET, call sendFile()
   // - If the header was valid and the method was HEAD, call a function to send back the header.
   // - If the header was valid and the method was POST, call a function to save the file to dis.
+  if (method == 1) { // GET
+    sendFile(sockFd, fileName);
+  } else if (method == 2) { // HEAD
+    // Call a function to send back the header.
+  } else if (method == 3) { // POST
+    // Call a function to save the file to disk.
+  }
 
   return 0;
 }
@@ -180,7 +254,7 @@ int main (int argc, char *argv[]) {
   // ********************************************************************
   struct sockaddr_in servaddr;
   servaddr.sin_family = PF_INET; // IPv4
-  servaddr.s_addr = INADDR_ANY; // Listen on any IP address
+  servaddr.sin_addr.s_addr = INADDR_ANY; // Listen on any IP address
   servaddr.sin_port = htons(6767); // Port number > 1028, convert to network byte order
 
 
