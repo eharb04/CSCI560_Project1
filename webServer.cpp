@@ -78,8 +78,42 @@ void sesendFile(int sockFd,std::string filename) {
 // **************************************************************************************
 // * processConnection
 // * -- process one connection/request.
+// * -- sockFd: fd for socket that is connected to client
 // **************************************************************************************
 int processConnection(int sockFd) {
+  bool close = false;
+  bool lineTerminator = false;
+  int bytesRead;
+  std::string container;
+
+  while(!close) { // Loop until "CLOSE" is received
+    container = ""; // Will hold whole line
+    char buffer[BUFFER_SIZE];
+    lineTerminator = false;
+
+    while (!lineTerminator) { // Loop until '\n' is received
+      bytesRead = read(sockFd, buffer, BUFFER_SIZE);
+
+      if (bytesRead <=0) {
+        DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
+        return 0;
+      }
+
+      for (int i = 0; i < bytesRead; i++) {
+        container += buffer[i];
+        if (buffer[i] == '\n') {
+          lineTerminator = true;
+        }
+      }
+    }
+
+    write(sockFd, container.c_str(), container.length()); // Echo the line back to the client
+
+    // "CLOSE" was found
+    if (message.find("CLOSE") != std::string::npos) {
+      close = true;
+    }
+  }
  
   // Call readHeader()
 
@@ -130,7 +164,7 @@ int main (int argc, char *argv[]) {
   // *******************************************************************
   // * Creating the inital socket using the socket() call.
   // ********************************************************************
-  int listenFd;
+  int listenFd = socket(AF_INET, SOCK_STREAM, 0);
   DEBUG << "Calling Socket() assigned file descriptor " << listenFd << ENDL;
 
   
@@ -144,7 +178,10 @@ int main (int argc, char *argv[]) {
   // If you want to listen for connections on any IP address you use the
   // address INADDR_ANY
   // ********************************************************************
-
+  struct sockaddr_in servaddr;
+  servaddr.sin_family = PF_INET; // IPv4
+  servaddr.s_addr = INADDR_ANY; // Listen on any IP address
+  servaddr.sin_port = htons(6767); // Port number > 1028, convert to network byte order
 
 
   // ********************************************************************
@@ -155,8 +192,9 @@ int main (int argc, char *argv[]) {
   // * Don't forget to check to see if bind() fails because the port
   // * you picked is in use, and if the port is in use, pick a different one.
   // ********************************************************************
-  uint16_t port;
+  uint16_t port = 6767;
   DEBUG << "Calling bind()" << ENDL;
+  bind(listenFd,(struct sockaddr *)&servaddr, sizeof(servaddr));
   
   std::cout << "Using port: " << port << std::endl;
 
@@ -167,6 +205,7 @@ int main (int argc, char *argv[]) {
   // * connections and starts the kernel listening for connections.
   // ********************************************************************
   DEBUG << "Calling listen()" << ENDL;
+  listen(listenFd, 10); // Max of 10 connections
 
 
   // ********************************************************************
@@ -177,8 +216,8 @@ int main (int argc, char *argv[]) {
   int quitProgram = 0;
   while (!quitProgram) {
     int connFd = 0;
-    DEBUG << "Calling connFd = accept(fd,NULL,NULL)." << ENDL;
-
+    DEBUG << "Calling connFd = accept(listenFd, NULL, NULL)." << ENDL;
+    connFd = accept(listenFd, NULL, NULL);
     
 
     DEBUG << "We have recieved a connection on " << connFd << ". Calling processConnection(" << connFd << ")" << ENDL;
