@@ -187,9 +187,12 @@ int main (int argc, char *argv[]) {
     DEBUG << "Closing file descriptor " << connFd << ENDL;
     close(connFd);
   }
+
+  // Catch SIGINT and send it to sig_handler
+  signal(SIGINT,sig_handler);
   
 
-  ERROR << "Program fell through to the end of main. A listening socket may have closed unexpectadly." << ENDL;
-  closefrom(3);
+  // ERROR << "Program fell through to the end of main. A listening socket may have closed unexpectadly." << ENDL;
+  // closefrom(3);
 
 }
