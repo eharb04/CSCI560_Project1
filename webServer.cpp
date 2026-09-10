@@ -34,7 +34,7 @@ void sig_handler(int signo) {
   DEBUG << "Caught signal #" << signo << ENDL;
   DEBUG << "Closing file descriptors 3-31." << ENDL;
   closefrom(3);
-  exit(1);
+  exit(0);
 }
 
 
@@ -52,7 +52,7 @@ int readHeader(int sockFd, std::string &fileName, int &method, std::string &head
     char buffer[BUFFER_SIZE];
     bytesRead = read(sockFd, buffer, BUFFER_SIZE);
 
-    if (bytesRead <=0) {
+    if (bytesRead <= 0) {
       DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
       return 0;
     }
@@ -140,6 +140,7 @@ void post(int sockFd, std::string &fileName, std::string &header) {
   // 200 if overwrite
   // 201 if new file created
   struct stat fileStat;
+  // fileName = "./data" + fileName;
   if (stat(fileName.c_str(), &fileStat) == 0) {
     send200(sockFd);
   } else {
@@ -148,7 +149,7 @@ void post(int sockFd, std::string &fileName, std::string &header) {
 
   // Get length of content from header
   size_t contentLength;
-  size_t startPos = header.find("Content-Length: ") + 16; // Length of "Content-Length: "
+  size_t startPos = header.find("Content-Length: ") + 16; // Length of Content-length 
   size_t endPos = header.find("\r\n", startPos);
   std::string contentLengthStr = header.substr(startPos, endPos - startPos);
   contentLength = std::stoul(contentLengthStr);
@@ -158,7 +159,7 @@ void post(int sockFd, std::string &fileName, std::string &header) {
   char buffer[BUFFER_SIZE];
   while (body.length() < contentLength) {
     memset(buffer, 0, BUFFER_SIZE); // Zero out buffer
-    size_t bytesToRead = std::min(BUFFER_SIZE, contentLength - body.length()); // Don't read more than needed
+    size_t bytesToRead = std::min((size_t)BUFFER_SIZE, contentLength - body.length()); // Don't read more than needed
     size_t bytesRead = read(sockFd, buffer, bytesToRead);
     if (bytesRead <= 0) {
       DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
@@ -168,7 +169,7 @@ void post(int sockFd, std::string &fileName, std::string &header) {
   }
 
   // Write body to file
-  std::ofstream f("./data/" + fileName);
+  std::ofstream f(fileName, std::ios::binary);
   f.write(body.c_str(), body.length());
   f.close();
 }
@@ -182,6 +183,7 @@ int sendHead(int sockFd, std::string fileName) {
   }
   size_t fileSize = fileStat.st_size;
 
+  // Good request
   send200(sockFd);
 
   std::string contentType;
@@ -195,8 +197,9 @@ int sendHead(int sockFd, std::string fileName) {
   }
   sendLine(sockFd, "content-type: " + contentType);
   sendLine(sockFd, "content-length: " + std::to_string(fileSize));
+  sendLine(sockFd, ""); // Blank line to indicate end of header
 
-  return 0;
+  return fileSize; // Return for sendFile to use;
 }
 
 
@@ -205,32 +208,13 @@ int sendHead(int sockFd, std::string fileName) {
 // * -- Send a file back to the browser.
 // **************************************************************************************
 void sendFile(int sockFd, std::string fileName) {
-  // struct stat fileStat;
-  // if (stat(fileName.c_str(), &fileStat) != 0) { // Read denied
-  //   send404(sockFd);
-  //   return;
-  // }
-  // size_t fileSize = fileStat.st_size;
-
-  // sendLine(sockFd, "HTTP/1.0 200 OK");
-
-  // std::string contentType;
-  // if (fileName.find(".html") != std::string::npos) {
-  //   contentType = "text/html";
-  // } else if (fileName.find(".jpg") != std::string::npos) {
-  //   contentType = "image/jpeg";
-  // } else { // Avoid unknown behavior
-  //   send400(sockFd);
-  //   return;
-  // }
-  // sendLine(sockFd, "content-type: " + contentType);
-  // sendLine(sockFd, "content-length: " + std::to_string(fileSize));
-  if (sendHead(sockFd, fileName) == -1) {
+  int fileSize = sendHead(sockFd, fileName);
+  if (fileSize == -1) { // Failed to send header
     return;
   }
 
   // Send file
-  std::ifstream f(fileName);
+  std::ifstream f(fileName, std::ios::binary);
   char buffer[BUFFER_SIZE];
   size_t bytesRead = 0;
   size_t smallBytesRead;
@@ -264,7 +248,7 @@ int processConnection(int sockFd) {
   //   while (!lineTerminator) { // Loop until '\n' is received
   //     bytesRead = read(sockFd, buffer, BUFFER_SIZE);
 
-  //     if (bytesRead <=0) {
+  //     if (bytesRead <= 0) {
   //       DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
   //       return 0;
   //     }
@@ -289,6 +273,7 @@ int processConnection(int sockFd) {
   std::string fileName, header;
   int method;
   int returnCode = readHeader(sockFd, fileName, method, header);
+  fileName = "./data" + fileName; // Prepend data directory to filename
 
   // If read header returned 400, send 400
   if (returnCode == 400) {
@@ -311,11 +296,11 @@ int processConnection(int sockFd) {
   // - If the header was valid and the method was GET, call sendFile()
   // - If the header was valid and the method was HEAD, call a function to send back the header.
   // - If the header was valid and the method was POST, call a function to save the file to dis.
-  if (method == 1) { // GET
+  if (method == GET) { // GET
     sendFile(sockFd, fileName);
-  } else if (method == 2) { // HEAD
+  } else if (method == HEAD) { // HEAD
     sendHead(sockFd, fileName);
-  } else if (method == 3) { // POST
+  } else if (method == POST) { // POST
     post(sockFd, fileName, header);
   }
 
@@ -357,6 +342,10 @@ int main (int argc, char *argv[]) {
   // * Creating the inital socket using the socket() call.
   // ********************************************************************
   int listenFd = socket(AF_INET, SOCK_STREAM, 0);
+  if (listenFd < 0) {
+    ERROR << "Failed to create socket" << ENDL;
+    exit(1);
+  }
   DEBUG << "Calling Socket() assigned file descriptor " << listenFd << ENDL;
 
   
@@ -370,7 +359,7 @@ int main (int argc, char *argv[]) {
   // If you want to listen for connections on any IP address you use the
   // address INADDR_ANY
   // ********************************************************************
-  struct sockaddr_in servaddr;
+  struct sockaddr_in servaddr{};
   servaddr.sin_family = PF_INET; // IPv4
   servaddr.sin_addr.s_addr = INADDR_ANY; // Listen on any IP address
   servaddr.sin_port = htons(6767); // Port number > 1028, convert to network byte order
@@ -386,8 +375,10 @@ int main (int argc, char *argv[]) {
   // ********************************************************************
   uint16_t port = 6767;
   DEBUG << "Calling bind()" << ENDL;
-  bind(listenFd,(struct sockaddr *)&servaddr, sizeof(servaddr));
-  
+  if (bind(listenFd,(struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+    ERROR << "Failed to bind socket" << ENDL;
+    exit(1);
+  }
   std::cout << "Using port: " << port << std::endl;
 
 
@@ -397,7 +388,10 @@ int main (int argc, char *argv[]) {
   // * connections and starts the kernel listening for connections.
   // ********************************************************************
   DEBUG << "Calling listen()" << ENDL;
-  listen(listenFd, 10); // Max of 10 connections
+  if (listen(listenFd, 10) < 0) { // Max of 10 connections
+    ERROR << "Failed to listen on socket" << ENDL;
+    exit(1);
+  }
 
 
   // ********************************************************************
