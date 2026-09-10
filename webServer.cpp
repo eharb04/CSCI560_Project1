@@ -30,7 +30,12 @@
 // * - Display the signal and exit (returning 0 to OS indicating normal shutdown)
 // * - Optional for 471, required for 598
 // **************************************************************************************
-// void sig_handler(int signo) {}
+void sig_handler(int signo) {
+  DEBUG << "Caught signal #" << signo << ENDL;
+  DEBUG << "Closing file descriptors 3-31." << ENDL;
+  closefrom(3);
+  exit(1);
+}
 
 
 // **************************************************************************************
@@ -38,10 +43,10 @@
 //   - Return HTTP code to be sent back
 //   - Set filename if appropriate. Filename syntax is validated but existance is not verified.
 // **************************************************************************************
-int readHeader(int sockFd, std::string &fileName, int &method) {
+int readHeader(int sockFd, std::string &fileName, int &method, std::string &header) {
   int returnCode = 400; // Default
-  std::string header;
   int bytesRead;
+  header = ""; // Clear header
 
   while(header.find("\r\n\r\n") == std::string::npos) {
     char buffer[BUFFER_SIZE];
@@ -90,13 +95,13 @@ int readHeader(int sockFd, std::string &fileName, int &method) {
 // * Send one line (including the line terminator <LF><CR>)
 // * - Assumes the terminator is not included, so it is appended.
 // **************************************************************************
-void sendLine(int sockFd, std::string &stringToSend) {
+void sendLine(int sockFd, const std::string &stringToSend) {
   char fullLine[stringToSend.length() + 2]; // +2 for \r\n
   std::copy(stringToSend.begin(), stringToSend.end(), fullLine);
   fullLine[stringToSend.length()] = '\r';
   fullLine[stringToSend.length() + 1] = '\n';
   
-  write(sockFd, fullLine, fullLine.length()); // Send array
+  write(sockFd, fullLine, sizeof(fullLine)); // Send array
 }
 
 // **************************************************************************
@@ -118,51 +123,53 @@ void send400(int sockFd) {
   sendLine(sockFd, "");
 }
 
+void send200(int sockFd) {
+  sendLine(sockFd, "HTTP/1.0 200 OK");
+  sendLine(sockFd, "");
+}
+
+void send201(int sockFd) {
+  sendLine(sockFd, "HTTP/1.0 201 Created");
+  sendLine(sockFd, "");
+}
+
 // POST method
 // Save file to disk
-void post(int sockFd, std::string &fileName) {
+void post(int sockFd, std::string &fileName, std::string &header) {
   // Handle error codes
   // 200 if overwrite
   // 201 if new file created
-  std::string errorCode;
   struct stat fileStat;
   if (stat(fileName.c_str(), &fileStat) == 0) {
-    errorCode = "200 OK";
+    send200(sockFd);
   } else {
-    errorCode = "201 Created";
+    send201(sockFd);
   }
 
-  // Scrape info from header
-  std::string header = "";
-  char buffer[BUFFER_SIZE];
-  size_t contentLength = MAX_SIZE_T; // Initialize to maximum value
-  size_t bytesRead = 0;
-  while (header.find("\r\n\r\n") == std::string::npos) {
-    size_t smallBytesRead = read(sockFd, buffer, BUFFER_SIZE);
-    if (smallBytesRead <= 0) {
-      DEBUG << "read() returned " << smallBytesRead << ".  Closing connection." << ENDL;
-      return;
-    }
-
-    for (size_t i = 0; i < smallBytesRead; i++) {
-      header += buffer[i];
-      // Find content length
-      if (contentLength == MAX_SIZE_T && header.find("Content-Length: ") != std::string::npos) {
-        size_t startPos = header.find("Content-Length: ") + 16; // Length of "Content-Length: "
-        size_t endPos = header.find("\r\n", startPos);
-        std::string contentLengthStr = header.substr(startPos, endPos - startPos);
-        contentLength = std::stoul(contentLengthStr);
-      }
-    }
-  }
+  // Get length of content from header
+  size_t contentLength;
+  size_t startPos = header.find("Content-Length: ") + 16; // Length of "Content-Length: "
+  size_t endPos = header.find("\r\n", startPos);
+  std::string contentLengthStr = header.substr(startPos, endPos - startPos);
+  contentLength = std::stoul(contentLengthStr);
 
   // Get body
-  size_t endOfHeader = header.find("\r\n\r\n");
-  std::string body = header.substr(endOfHeader + 4); // +4 to skip to body
+  std::string body = header.substr(header.find("\r\n\r\n") + 4); // +4 to skip to body
+  char buffer[BUFFER_SIZE];
+  while (body.length() < contentLength) {
+    memset(buffer, 0, BUFFER_SIZE); // Zero out buffer
+    size_t bytesToRead = std::min(BUFFER_SIZE, contentLength - body.length()); // Don't read more than needed
+    size_t bytesRead = read(sockFd, buffer, bytesToRead);
+    if (bytesRead <= 0) {
+      DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
+      return;
+    }
+    body.append(buffer, bytesRead); // Add to body
+  }
 
   // Write body to file
   std::ofstream f("./data/" + fileName);
-  f << body;
+  f.write(body.c_str(), body.length());
   f.close();
 }
 
@@ -175,7 +182,7 @@ int sendHead(int sockFd, std::string fileName) {
   }
   size_t fileSize = fileStat.st_size;
 
-  sendLine(sockFd, "HTTP/1.0 200 OK");
+  send200(sockFd);
 
   std::string contentType;
   if (fileName.find(".html") != std::string::npos) {
@@ -279,9 +286,9 @@ int processConnection(int sockFd) {
   // }
  
   // Call readHeader()
-  std::string fileName;
+  std::string fileName, header;
   int method;
-  int returnCode = readHeader(sockFd, &fileName, &method);
+  int returnCode = readHeader(sockFd, fileName, method, header);
 
   // If read header returned 400, send 400
   if (returnCode == 400) {
@@ -309,7 +316,7 @@ int processConnection(int sockFd) {
   } else if (method == 2) { // HEAD
     sendHead(sockFd, fileName);
   } else if (method == 3) { // POST
-    // Call a function to save the file to disk.
+    post(sockFd, fileName, header);
   }
 
   return 0;
@@ -342,6 +349,7 @@ int main (int argc, char *argv[]) {
   // * Catch all possible signals
   // ********************************************************************
   DEBUG << "Setting up signal handlers" << ENDL;
+  signal(SIGINT, sig_handler);
   
 
   
@@ -409,13 +417,9 @@ int main (int argc, char *argv[]) {
     DEBUG << "processConnection returned " << quitProgram << " (should always be 0)" << ENDL;
     DEBUG << "Closing file descriptor " << connFd << ENDL;
     close(connFd);
-  }
+  }  
 
-  // Catch SIGINT and send it to sig_handler
-  signal(SIGINT,sig_handler);
-  
-
-  // ERROR << "Program fell through to the end of main. A listening socket may have closed unexpectadly." << ENDL;
-  // closefrom(3);
+  ERROR << "Program fell through to the end of main. A listening socket may have closed unexpectadly." << ENDL;
+  closefrom(3);
 
 }
