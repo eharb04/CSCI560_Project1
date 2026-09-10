@@ -118,13 +118,79 @@ void send400(int sockFd) {
   sendLine(sockFd, "");
 }
 
+void post(int sockFd, std::string &fileName) {
+  
+}
+
+// Send just the header
+int sendHead(int sockFd, std::string fileName) {
+  struct stat fileStat;
+  if (stat(fileName.c_str(), &fileStat) != 0) { // Read denied
+    send404(sockFd);
+    return -1;
+  }
+  size_t fileSize = fileStat.st_size;
+
+  sendLine(sockFd, "HTTP/1.0 200 OK");
+
+  std::string contentType;
+  if (fileName.find(".html") != std::string::npos) {
+    contentType = "text/html";
+  } else if (fileName.find(".jpg") != std::string::npos) {
+    contentType = "image/jpeg";
+  } else { // Avoid unknown behavior
+    send400(sockFd);
+    return -1;
+  }
+  sendLine(sockFd, "content-type: " + contentType);
+  sendLine(sockFd, "content-length: " + std::to_string(fileSize));
+
+  return 0;
+}
+
 
 // **************************************************************************************
 // * sendFile
 // * -- Send a file back to the browser.
 // **************************************************************************************
-void sendFile(int sockFd, std::string filename) {
-  return;
+void sendFile(int sockFd, std::string fileName) {
+  // struct stat fileStat;
+  // if (stat(fileName.c_str(), &fileStat) != 0) { // Read denied
+  //   send404(sockFd);
+  //   return;
+  // }
+  // size_t fileSize = fileStat.st_size;
+
+  // sendLine(sockFd, "HTTP/1.0 200 OK");
+
+  // std::string contentType;
+  // if (fileName.find(".html") != std::string::npos) {
+  //   contentType = "text/html";
+  // } else if (fileName.find(".jpg") != std::string::npos) {
+  //   contentType = "image/jpeg";
+  // } else { // Avoid unknown behavior
+  //   send400(sockFd);
+  //   return;
+  // }
+  // sendLine(sockFd, "content-type: " + contentType);
+  // sendLine(sockFd, "content-length: " + std::to_string(fileSize));
+  if (sendHead(sockFd, fileName) == -1) {
+    return;
+  }
+
+  // Send file
+  std::ifstream f(fileName);
+  char buffer[BUFFER_SIZE];
+  size_t bytesRead = 0;
+  size_t smallBytesRead;
+  while (bytesRead < fileSize) {
+    memset(buffer, 0, BUFFER_SIZE); // Zero out buffer
+    f.read(buffer, BUFFER_SIZE);
+    smallBytesRead = f.gcount(); // Number of bytes read
+    write(sockFd, buffer, smallBytesRead);
+
+    bytesRead += smallBytesRead; // Update total bytes read
+  }
 }
 
 
@@ -134,39 +200,39 @@ void sendFile(int sockFd, std::string filename) {
 // * -- sockFd: fd for socket that is connected to client
 // **************************************************************************************
 int processConnection(int sockFd) {
-  bool close = false;
-  bool lineTerminator = false;
-  int bytesRead;
-  std::string container;
+  // bool close = false;
+  // bool lineTerminator = false;
+  // int bytesRead;
+  // std::string container;
 
-  while(!close) { // Loop until "CLOSE" is received
-    container = ""; // Will hold whole line
-    char buffer[BUFFER_SIZE];
-    lineTerminator = false;
+  // while(!close) { // Loop until "CLOSE" is received
+  //   container = ""; // Will hold whole line
+  //   char buffer[BUFFER_SIZE];
+  //   lineTerminator = false;
 
-    while (!lineTerminator) { // Loop until '\n' is received
-      bytesRead = read(sockFd, buffer, BUFFER_SIZE);
+  //   while (!lineTerminator) { // Loop until '\n' is received
+  //     bytesRead = read(sockFd, buffer, BUFFER_SIZE);
 
-      if (bytesRead <=0) {
-        DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
-        return 0;
-      }
+  //     if (bytesRead <=0) {
+  //       DEBUG << "read() returned " << bytesRead << ".  Closing connection." << ENDL;
+  //       return 0;
+  //     }
 
-      for (int i = 0; i < bytesRead; i++) {
-        container += buffer[i];
-        if (buffer[i] == '\n') {
-          lineTerminator = true;
-        }
-      }
-    }
+  //     for (int i = 0; i < bytesRead; i++) {
+  //       container += buffer[i];
+  //       if (buffer[i] == '\n') {
+  //         lineTerminator = true;
+  //       }
+  //     }
+  //   }
 
-    write(sockFd, container.c_str(), container.length()); // Echo the line back to the client
+  //   write(sockFd, container.c_str(), container.length()); // Echo the line back to the client
 
-    // "CLOSE" was found
-    if (container.find("CLOSE") != std::string::npos) {
-      close = true;
-    }
-  }
+  //   // "CLOSE" was found
+  //   if (container.find("CLOSE") != std::string::npos) {
+  //     close = true;
+  //   }
+  // }
  
   // Call readHeader()
   std::string fileName;
@@ -197,7 +263,7 @@ int processConnection(int sockFd) {
   if (method == 1) { // GET
     sendFile(sockFd, fileName);
   } else if (method == 2) { // HEAD
-    // Call a function to send back the header.
+    sendHead(sockFd, fileName);
   } else if (method == 3) { // POST
     // Call a function to save the file to disk.
   }
