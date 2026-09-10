@@ -118,8 +118,52 @@ void send400(int sockFd) {
   sendLine(sockFd, "");
 }
 
+// POST method
+// Save file to disk
 void post(int sockFd, std::string &fileName) {
-  
+  // Handle error codes
+  // 200 if overwrite
+  // 201 if new file created
+  std::string errorCode;
+  struct stat fileStat;
+  if (stat(fileName.c_str(), &fileStat) == 0) {
+    errorCode = "200 OK";
+  } else {
+    errorCode = "201 Created";
+  }
+
+  // Scrape info from header
+  std::string header = "";
+  char buffer[BUFFER_SIZE];
+  size_t contentLength = MAX_SIZE_T; // Initialize to maximum value
+  size_t bytesRead = 0;
+  while (header.find("\r\n\r\n") == std::string::npos) {
+    size_t smallBytesRead = read(sockFd, buffer, BUFFER_SIZE);
+    if (smallBytesRead <= 0) {
+      DEBUG << "read() returned " << smallBytesRead << ".  Closing connection." << ENDL;
+      return;
+    }
+
+    for (size_t i = 0; i < smallBytesRead; i++) {
+      header += buffer[i];
+      // Find content length
+      if (contentLength == MAX_SIZE_T && header.find("Content-Length: ") != std::string::npos) {
+        size_t startPos = header.find("Content-Length: ") + 16; // Length of "Content-Length: "
+        size_t endPos = header.find("\r\n", startPos);
+        std::string contentLengthStr = header.substr(startPos, endPos - startPos);
+        contentLength = std::stoul(contentLengthStr);
+      }
+    }
+  }
+
+  // Get body
+  size_t endOfHeader = header.find("\r\n\r\n");
+  std::string body = header.substr(endOfHeader + 4); // +4 to skip to body
+
+  // Write body to file
+  std::ofstream f("./data/" + fileName);
+  f << body;
+  f.close();
 }
 
 // Send just the header
