@@ -79,8 +79,8 @@ int readHeader(int sockFd, std::string &fileName, int &method, std::string &head
     return returnCode; // Invalid method
   }
 
-  bool validFileName = std::regex_match(fileName, std::regex("/file[0-9]+\\.html")) || 
-                       std::regex_match(fileName, std::regex("/image[0-9]+\\.jpg"));
+  bool validFileName = std::regex_match(fileName, std::regex("/file[0-9]\\.html")) || 
+                       std::regex_match(fileName, std::regex("/image[0-9]\\.jpg"));
   if (validFileName) {
     returnCode = 200; // Valid method and file
   } else {
@@ -125,12 +125,10 @@ void send400(int sockFd) {
 
 void send200(int sockFd) {
   sendLine(sockFd, "HTTP/1.0 200 OK");
-  sendLine(sockFd, "");
 }
 
 void send201(int sockFd) {
   sendLine(sockFd, "HTTP/1.0 201 Created");
-  sendLine(sockFd, "");
 }
 
 // POST method
@@ -348,6 +346,13 @@ int main (int argc, char *argv[]) {
   }
   DEBUG << "Calling Socket() assigned file descriptor " << listenFd << ENDL;
 
+  // Allow rebinding after close so it doesn't wait for port to be released
+  int reuseAddr = 1;
+  if (setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &reuseAddr, sizeof(reuseAddr)) < 0) {
+    ERROR << "Failed to set SO_REUSEADDR" << ENDL;
+    exit(1);
+  }
+
   
   // ********************************************************************
   // * The bind() call takes a structure used to spefiy the details of the connection. 
@@ -362,7 +367,7 @@ int main (int argc, char *argv[]) {
   struct sockaddr_in servaddr{};
   servaddr.sin_family = PF_INET; // IPv4
   servaddr.sin_addr.s_addr = INADDR_ANY; // Listen on any IP address
-  servaddr.sin_port = htons(6767); // Port number > 1028, convert to network byte order
+  // servaddr.sin_port = htons(6767); // Port number > 1028, convert to network byte order
 
 
   // ********************************************************************
@@ -374,10 +379,19 @@ int main (int argc, char *argv[]) {
   // * you picked is in use, and if the port is in use, pick a different one.
   // ********************************************************************
   uint16_t port = 6767;
-  DEBUG << "Calling bind()" << ENDL;
-  if (bind(listenFd,(struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-    ERROR << "Failed to bind socket" << ENDL;
-    exit(1);
+  bool bound = false;
+  while (!bound) {
+    servaddr.sin_port = htons(port);
+    DEBUG << "Calling bind() on port " << port << ENDL;
+    if (bind(listenFd, (struct sockaddr *)&servaddr, sizeof(servaddr)) == 0) {
+      bound = true;
+    } else if (errno == EADDRINUSE) { // Port number is being used
+      DEBUG << "Port " << port << " is in use, trying the next one." << ENDL;
+      port++; // Try next port number
+    } else { // Check for binding error
+      ERROR << "Failed to bind socket: " << strerror(errno) << ENDL;
+      exit(1);
+    }
   }
   std::cout << "Using port: " << port << std::endl;
 
